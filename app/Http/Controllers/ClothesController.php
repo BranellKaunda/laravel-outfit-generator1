@@ -4,31 +4,42 @@ namespace App\Http\Controllers;
 
 use App\Enums\ImageType;
 use App\Models\Clothes;
+use App\Services\ImageNormalizer;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Image;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Enum;
 
 class ClothesController extends Controller
 {
+    public function __construct(private ImageNormalizer $normalizer) {}
+
     /**
      * Display a listing of the resource.
      */
-    public function index()
+    public function index(Request $request)
     {
         /** @var FilesystemAdapter $storage */
-        //local type hint ("trust me this is a FilesystemAdapter") so that we can use the url() and temporaryUrl() methods without IDE errors
-        
         $storage = Storage::disk('s3');
 
-        $urls = Clothes::all()->map(fn ($clothes) => [
+        $urls = $request->user()->clothes()->latest()->get()->map(fn (Clothes $clothes) => [
             'id' => $clothes->id,
+            'type' => $clothes->type,
+            'created_at' => $clothes->created_at,
             'photo' => $clothes->photo,
             'public_url' => $storage->url($clothes->photo),
-            'temporary_url' => $storage->temporaryUrl($clothes->photo, now()->addMinutes(5)),
         ]);
 
-        dd($urls);
+        $tops = $urls->where('type', ImageType::Top)->values();
+        $bottoms = $urls->where('type', ImageType::Bottom)->values();
+        $avatars = $urls->where('type', ImageType::Avatar)->values();
+
+        return view('welcome', [
+            'tops' => $tops,
+            'bottoms' => $bottoms,
+            'avatars' => $avatars,
+        ]);
     }
 
     /**
@@ -45,14 +56,15 @@ class ClothesController extends Controller
     public function store(Request $request)
     {
         $file = $request->validate([
-            'photo' => ['required', 'mimes:jpg,png'],
+            'photo' => ['required', 'mimes:jpg,png,webp,avif'],
             'type' => ['required', new Enum(ImageType::class)],
         ]);
 
-        $photoPath = $file['photo']->store('clothes');
+        $photoPath = Image::fromBytes($this->normalizer->normalize($file['photo']))
+            ->store('clothes');
 
         Clothes::create([
-            'user_id' => 1,
+            'user_id' => $request->user()->id,
             'type' => $file['type'],
             'photo' => $photoPath,
         ]);
